@@ -16,8 +16,8 @@ import glob
 
 
 def main():
-   dataStatsManager = DataStatsManager()    
-   dataStatsManager.ticker_stats_calc('EURUSD')
+   backTest = BackTest()    
+   backTest.control('EURUSD')
 
 
 ###############################################################################
@@ -41,15 +41,25 @@ class ForexSize(enum.Enum):
 class Broker():
     def __init__(self, df, size = ForexSize.STANDARD_LOT):
         self.df = df
-        self.size = size
         self.order = OrderType.NONE         # requesting only
         self.postion = PositionType.NONE    # filled / positioned
         self.orders = []
         self.orders_df = pd.DataFrame()
+        self.size = 0.0
+        if size == ForexSize.MINI_LOT:
+            self.size = 10000.0
+        elif size == ForexSize.MICRO_LOT:
+            self.size = 1000.0
+        else:
+            self.size = 100000.0
+        
+
 
     def excute_order(self, price, df_index):
+        #print(f"excute_order:  self.order={self.order}")
         if self.order == OrderType.EXIT:
             if len(self.orders) > 0:
+                print(f"excute_order: OrderType.EXIT: len(self.orders)={len(self.orders)}")
                 order = self.orders[-1]
                 order['exit_price'] = price
                 delt = (order['exit_price'] - order['entry_price'])
@@ -59,17 +69,20 @@ class Broker():
                 order['exit_index'] = df_index
                 self.orders[-1] = order
             self.order = OrderType.NONE
+            self.postion = PositionType.NONE
             return
 
         if self.order == OrderType.LONG:
-            dict = {'order_type': OrderType.LONG, 'entry_price': price, 'exit_price': 0, 'profit_losss': 0, 'entry_index': df_index, 'exit_index': 0}
+            print(f"excute_order: OrderType.LONG: len(self.orders)={len(self.orders)}")
+            dict = {'order_type': OrderType.LONG, 'entry_price': price, 'exit_price': 0.0, 'profit_loss': 0.0, 'entry_index': df_index, 'exit_index': 0}
             self.orders.append(dict)
             self.order = OrderType.NONE
             self.postion = PositionType.LONG
             return
 
         if self.order == OrderType.SHORT:
-            dict = {'order_type': OrderType.SHORT, 'entry_price': price, 'exit_price': 0, 'profit_losss': 0, 'entry_index': df_index, 'exit_index': 0}
+            print(f"excute_order: OrderType.SHORT: len(self.orders)={len(self.orders)}")
+            dict = {'order_type': OrderType.SHORT, 'entry_price': price, 'exit_price': 0.0, 'profit_loss': 0.0, 'entry_index': df_index, 'exit_index': 0}
             self.orders.append(dict)
             self.order = OrderType.NONE
             self.postion = PositionType.SHORT
@@ -77,15 +90,30 @@ class Broker():
         
 
     def send_order(self, type):
+        if type == OrderType.EXIT:
+            self.order = type
+            print(f"send_order: type={type}")
+            return True
+
         if (self.order != OrderType.NONE):
             return False
+
         if (self.postion != PositionType.NONE):
             return False
+
         self.order = type
+        print(f"send_order: type={type}")
         return True
 
     def get_orders_df(self):
         self.orders_df = pd.DataFrame(self.orders)
+        orders = self.orders_df
+        acc_profit = 0
+        profits = []
+        for m in range(orders.shape[0]):
+            acc_profit  += orders.at[m, 'profit_loss']
+            profits.append(acc_profit)
+        self.orders_df['ACC_PL'] = profits
         return self.orders_df
 
 
@@ -94,13 +122,47 @@ class SecurityInfo():
         self.ticker_name = ticker_name
         self.csv_file_name = "data/datasets/"+ticker_name+'.csv'
         self.df = {}
-        self.broker = Broker(self.df)
+        self.count = 0
 
     def load_dataframe(self, df_header):
         self.df = pd.read_csv(self.csv_file_name)
-        self.df.columns = df_header.split(',')
+        self.df.columns = df_header.split(',')  # replace orignal headers
+        self.broker = Broker(self.df)
 
-class DataStatsManager():
+    def on_data(self, index, forceExit = False):
+        self.count += 1
+        #print(f"index1 = {index}")
+
+        #print(f"index2 = {index}")
+        price = self.df.at[index, 'Close']
+        self.broker.excute_order(price, index);
+
+        if forceExit:
+            #print(f"forceExit: index = {index}")
+            self.broker.send_order(OrderType.EXIT)
+            return
+
+
+        # analysis
+        #print(f"index3 = {index}")
+
+        #if self.broker.order == OrderType.NONE and self.broker.postion == PositionType.NONE:
+
+
+        if self.count == 60:
+            #print(f"on_data: Enter: index = {index}")
+            self.broker.send_order(OrderType.LONG)
+
+        if self.count == 120:
+            #print(f"-> on_data: Exit: index = {index}")
+            self.broker.send_order(OrderType.EXIT)
+
+        if self.count == 180:
+            self.count = 0
+            
+        
+
+class BackTest():
     def __init__(self):
         self.count = 0
         self.csv_header = "<TICKER>,<DTYYYYMMDD>,<TIME>,<OPEN>,<HIGH>,<LOW>,<CLOSE>"
@@ -178,19 +240,9 @@ class DataStatsManager():
         }
 
     
-    def ticker_stats_calc(self, ticker_symbol):
+    def control(self, ticker_symbol):
         security = self.tickers_map[ticker_symbol]
         security.load_dataframe(self.df_header)
-        #print(security.stats)
-        #security.stats = "TO DO"
-        #print(security.stats)
-        #security.df['ema200'] = ta.ema(security.df['Close'], length=200)
-        #security.df['ema400'] = ta.ema(security.df['Close'], length=200*2)
-        #security.df['ema600'] = ta.ema(security.df['Close'], length=200*3)
-        #security.df['ema800'] = ta.ema(security.df['Close'], length=200*4)
-        #security.df['ema1000'] = ta.ema(security.df['Close'], length=200*5)
-        #security.df['ema1200'] = ta.ema(security.df['Close'], length=200*6)
-        #security.df['ema3000'] = ta.ema(security.df['Close'], length=50*60)
         security.df['sma_long'] = ta.sma(security.df['Close'], length=50*60)
         security.df['sma_mid'] = ta.sma(security.df['Close'], length=50*15)
         macd_df = ta.macd(security.df['Close'], 12*5, 26*5)
@@ -211,79 +263,44 @@ class DataStatsManager():
         security.df['macd_line'] = macd_df.iloc[:, 2]  # diff
         security.df['macd_signal'] = ta.ema(security.df['macd_line'], length=9*5) # extra filter
         security.df['macd_histogram'] = security.df['macd_line'] - security.df['macd_signal']
-
-        #print(security.df.head(10))
         print(security.df)
 
-
-        #print(security.df.loc[3, ['Date', 'Time']])
-        #row = security.df.loc[3, ['Date', 'Time']]
-
-        #print("row:")
-        #print(row)
-
-        #d = security.df.at[3, 'Date']
-        #t = security.df.at[3, 'Time']
-        #print(f"{d}-{t}")
-
-        #print(security.df.loc[3, ['Date']] )
-        #print(security.df.loc[3, ['Time']] )
-        #security.df['Close'].plot(style='.-', title=f"{ticker_symbol}")
-        #plt.grid()
-        #plt.show()
-
-        #stats = {'daily_range': [], '2h_range': [], '1h_range': [], '30m_range': []}
-        #self.df_daily = self.resample('daily')
-        #self.df_2h = self.resample('2h')
-        #self.df_1h = self.resample('1h')
-        #self.df_30m = self.resample('30m')
-        #self.df_15m = self.resample('15m')
-        #self.df_5m = self.resample('5m')
-
-        fig, (ax1, ax2) = plt.subplots(2, 1)
-        #ax = fig.add_axes(security.df['Close'])
-        #ax.plot(list(security.df.index.values), security.df['Close'], linestyle='-.')
-        #cursor = Cursor(ax, color='pink', linewidth=0.5)
+        _, (ax1, ax2) = plt.subplots(2, 1)
         df_size = security.df.shape[0]
-        data_start = df_size - 100*24*60;
+        data_start = 0 # df_size - 3*24*60;
         data_end = df_size
         print(f"df_size={df_size}")
+
+        # -------------------------------------------------------------------------------------------------------------------------------------------
+        for n in range(data_start, data_end):
+            if (data_end - n) < 5:
+                security.on_data(n, forceExit=True)
+            else:
+                security.on_data(n, forceExit=False)
+            
+        orders = security.broker.get_orders_df()
+        print(orders)
+
+        # -------------------------------------------------------------------------------------------------------------------------------------------
+        """
         ax1.plot(security.df.index[data_start:data_end], security.df['Close'][data_start:data_end], linestyle='-', marker='.', label='price')
-        #ax.plot(security.df.index[0:24*60*num_days+1], security.df['ema200'][0:24*60*num_days+1], linestyle='-', marker='.', label='ema200')
-        #ax.plot(security.df.index[0:24*60*num_days+1], security.df['ema400'][0:24*60*num_days+1], linestyle='-', marker='.', label='ema400')
-        #ax.plot(security.df.index[0:24*60*num_days+1], security.df['ema600'][0:24*60*num_days+1], linestyle='-', marker='.', label='ema600')
-        #ax.plot(security.df.index[0:24*60*num_days+1], security.df['ema800'][0:24*60*num_days+1], linestyle='-', marker='.', label='ema800')
-        #ax.plot(security.df.index[0:24*60*num_days+1], security.df['ema1000'][0:24*60*num_days+1], linestyle='-', marker='.', label='ema1000')
-        #ax.plot(security.df.index[0:24*60*num_days+1], security.df['ema1200'][0:24*60*num_days+1], linestyle='-', marker='.', label='ema1200')
-        #ax.plot(security.df.index[0:24*60*num_days+1], security.df['ema3000'][0:24*60*num_days+1], linestyle='-', marker='.', label='ema3000')
         ax1.plot(security.df.index[data_start:data_end], security.df['sma_long'][data_start:data_end], linestyle='-', marker='.',  linewidth=0.5, label='sma_long')
         ax1.plot(security.df.index[data_start:data_end], security.df['sma_mid'][data_start:data_end], linestyle='-', marker='.',  linewidth=0.5, label='sma_mid')
-
         ax2.plot(security.df.index[data_start:data_end], security.df['macd_line'][data_start:data_end], linestyle='-', marker='.',  linewidth=0.5, label='macd_line')
         ax2.plot(security.df.index[data_start:data_end], security.df['macd_signal'][data_start:data_end], linestyle='-', marker='.',  linewidth=0.5, label='macd_signal')
-        #ax2.bar(security.df.index[data_start:data_end], security.df['macd_histogram'][data_start:data_end], label='macd_histogram')
-        #ax.plot(security.df.index[0:], security.df['Close'][0:], linestyle='-', marker='.')
-        #cursor = Cursor(ax, color='m', linewidth=0.25)
 
         crs1 = mplcursors.cursor(ax1, hover=True)
         crs1.connect("add", lambda sel: sel.annotation.set_text(f"{parser.parse(str(security.df.at[int(sel.target[0]), 'Date'])).strftime('%a')}, {str(security.df.at[int(sel.target[0]), 'Date'])[2:]}-{str(security.df.at[int(sel.target[0]), 'Time']).zfill(6)} {str(int(sel.target[1]*10000)/10000)}"))
         ax1.set_title(f"{ticker_symbol}")
         ax1.grid(True)
         ax1.legend()
-
         crs2 = mplcursors.cursor(ax2, hover=True)
         crs2.connect("add", lambda sel: sel.annotation.set_text(f"{parser.parse(str(security.df.at[int(sel.target[0]), 'Date'])).strftime('%a')}, {str(security.df.at[int(sel.target[0]), 'Date'])[2:]}-{str(security.df.at[int(sel.target[0]), 'Time']).zfill(6)} {str(int(sel.target[1]*10000)/10000)}"))
-        #print(f"{parser.parse(str(security.df.at[1, 'Date'])).strftime('%a')}");
-        
-        #parser.parse(str(security.df.at[int(sel.target[0]), 'Date'])).strftime("%a")
-
-        
-
-
-       
         ax2.grid(True)
         ax2.legend()
         plt.show()
+        """
+
 
 
 
